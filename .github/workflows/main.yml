@@ -62,6 +62,27 @@ jobs:
         with:
           mask-password: 'true'
 
+      - name: Validate ECR Configuration
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+        run: |
+          set -euo pipefail
+
+          : "${ECR_REGISTRY:?ECR registry is empty}"
+          : "${ECR_REPOSITORY:?ECR repository secret is missing}"
+
+          echo "ECR Registry: $ECR_REGISTRY"
+          echo "ECR Repository: $ECR_REPOSITORY"
+
+          if [[ ! "$ECR_REPOSITORY" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$ ]]; then
+            echo "Invalid ECR repository name"
+            exit 1
+          fi
+
+          aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY"
+
       - name: Build and Push Docker Image
         id: build-image
         env:
@@ -71,14 +92,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          LATEST_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          echo "Building: $IMAGE_URI"
+
           docker build \
-            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" .
+            -t "$IMAGE_URI" \
+            -t "$LATEST_URI" .
 
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          docker push "$IMAGE_URI"
+          docker push "$LATEST_URI"
 
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
   # ---------------------------
   # CONTINUOUS DEPLOYMENT
@@ -104,7 +130,27 @@ jobs:
         with:
           mask-password: 'true'
 
-      - name: Pull Latest Docker Image
+      - name: Validate Deployment Image
+        env:
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
+          REGISTRY: ${{ needs.build-and-push-ecr-image.outputs.registry }}
+        run: |
+          set -euo pipefail
+
+          : "${IMAGE:?Deployment image output is empty}"
+          : "${REGISTRY:?ECR registry output is empty}"
+
+          echo "Deployment image: $IMAGE"
+
+          case "$IMAGE" in
+            "$REGISTRY"/*:*) ;;
+            *)
+              echo "Invalid image reference: $IMAGE"
+              exit 1
+              ;;
+          esac
+
+      - name: Pull Docker Image
         env:
           IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
         run: |
@@ -130,7 +176,18 @@ jobs:
 
       - name: Verify Container
         run: |
+          set -euo pipefail
+
+          sleep 5
+
           docker ps --filter "name=network_security"
+
+          if [ "$(docker inspect -f '{{.State.Running}}' network_security)" != "true" ]; then
+            echo "Container failed to start"
+            docker logs network_security
+            exit 1
+          fi
+
           docker logs --tail 50 network_security
 
       - name: Clean Unused Docker Images
