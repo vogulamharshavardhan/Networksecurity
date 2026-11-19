@@ -1,4 +1,3 @@
-
 name: NetworkSecurity CI-CD pipeline
 
 on:
@@ -76,9 +75,7 @@ jobs:
           echo "ECR Registry: $ECR_REGISTRY"
           echo "ECR Repository: $ECR_REPOSITORY"
 
-          aws ecr describe-repositories \
-            --repository-names "$ECR_REPOSITORY" \
-            --region "$AWS_REGION"
+          aws ecr describe-repositories             --repository-names "$ECR_REPOSITORY"             --region "$AWS_REGION"
 
       - name: Build and Push Docker Image
         env:
@@ -97,18 +94,12 @@ jobs:
 
           echo "Building Docker image: $IMAGE_URI"
 
-          docker build \
-            -t "$IMAGE_URI" \
-            -t "$LATEST_URI" .
+          docker build             -t "$IMAGE_URI"             -t "$LATEST_URI" .
 
-          echo "Pushing versioned image..."
           docker push "$IMAGE_URI"
-
-          echo "Pushing latest image..."
           docker push "$LATEST_URI"
 
           echo "Docker image successfully pushed to ECR."
-          echo "Image URI: $IMAGE_URI"
 
   # ==========================================
   # 3. CONTINUOUS DEPLOYMENT
@@ -121,7 +112,7 @@ jobs:
     steps:
 
       # ==========================================
-      # VERIFY AWS CLI INSTALLATION
+      # VERIFY AWS CLI
       # ==========================================
       - name: Verify AWS CLI
         run: |
@@ -129,12 +120,7 @@ jobs:
 
           export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-          echo "Checking AWS CLI installation..."
-
-          echo "AWS CLI location:"
           command -v aws
-
-          echo "AWS CLI version:"
           aws --version
 
       # ==========================================
@@ -158,28 +144,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-
           : "${AWS_REGION:?AWS region is missing}"
           : "${ECR_REPOSITORY:?ECR repository is missing}"
-          : "${IMAGE_TAG:?Image tag is missing}"
+          : "${IMAGE_TAG:?IMAGE tag is missing}"
 
-          echo "Retrieving ECR repository URI..."
-
-          REPOSITORY_URI=$(aws ecr describe-repositories \
-            --repository-names "$ECR_REPOSITORY" \
-            --region "$AWS_REGION" \
-            --query 'repositories[0].repositoryUri' \
-            --output text)
-
-          : "${REPOSITORY_URI:?Could not retrieve ECR repository URI}"
+          REPOSITORY_URI=$(aws ecr describe-repositories             --repository-names "$ECR_REPOSITORY"             --region "$AWS_REGION"             --query 'repositories[0].repositoryUri'             --output text)
 
           IMAGE="${REPOSITORY_URI}:${IMAGE_TAG}"
 
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-          echo "Generated deployment image:"
-          echo "$IMAGE"
+          echo "Image URI generated successfully."
 
       # ==========================================
       # LOGIN TO AMAZON ECR
@@ -195,52 +170,114 @@ jobs:
       - name: Pull Docker Image
         run: |
           set -euo pipefail
-
-          echo "Pulling image: $IMAGE"
-
           docker pull "$IMAGE"
 
       # ==========================================
-      # STOP EXISTING CONTAINER
+      # VALIDATE APPLICATION SECRETS
       # ==========================================
-      - name: Stop Existing Container
-        run: |
-          docker rm -f network_security || true
-
-      # ==========================================
-      # RUN NEW DOCKER CONTAINER
-      # ==========================================
-      - name: Run New Docker Container
+      - name: Validate Application Secrets
+        env:
+          MONGODB_URL_KEY: ${{ secrets.MONGODB_URL_KEY }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           set -euo pipefail
 
-          docker run -d \
-            --restart unless-stopped \
-            -p 8080:8080 \
-            --ipc=host \
-            --name network_security \
-            "$IMAGE"
+          : "${MONGODB_URL_KEY:?MongoDB URL is missing}"
+          : "${MLFLOW_TRACKING_URI:?MLflow URI is missing}"
+          : "${MLFLOW_TRACKING_USERNAME:?MLflow username is missing}"
+          : "${MLFLOW_TRACKING_PASSWORD:?MLflow password is missing}"
+
+          echo "All required application secrets are configured."
 
       # ==========================================
-      # VERIFY CONTAINER
+      # DEPLOY NEW CONTAINER
+      # ==========================================
+      - name: Run New Docker Container
+        env:
+          MONGODB_URL_KEY: ${{ secrets.MONGODB_URL_KEY }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          : "${MONGODB_URL_KEY:?MongoDB URL is missing}"
+          : "${MLFLOW_TRACKING_URI:?MLflow URI is missing}"
+          : "${MLFLOW_TRACKING_USERNAME:?MLflow username is missing}"
+          : "${MLFLOW_TRACKING_PASSWORD:?MLflow password is missing}"
+
+          # Preserve the previous container for rollback.
+          docker rm -f network_security_previous 2>/dev/null || true
+
+          if docker ps -a --format '{{.Names}}' | grep -qx network_security; then
+            docker rename network_security network_security_previous
+          fi
+
+          # Start new application.
+          if ! docker run -d             --restart unless-stopped             -p 8080:8080             --ipc=host             --name network_security             -e MONGODB_URL_KEY             -e MLFLOW_TRACKING_URI             -e MLFLOW_TRACKING_USERNAME             -e MLFLOW_TRACKING_PASSWORD             "$IMAGE"; then
+
+            echo "New container failed to start."
+
+            docker rm -f network_security 2>/dev/null || true
+
+            if docker ps -a --format '{{.Names}}' | grep -qx network_security_previous; then
+              docker rename network_security_previous network_security
+              docker start network_security
+            fi
+
+            exit 1
+          fi
+
+      # ==========================================
+      # VERIFY APPLICATION HEALTH
       # ==========================================
       - name: Verify Container
         run: |
           set -euo pipefail
 
-          sleep 5
+          echo "Waiting for FastAPI application..."
 
-          if [ "$(docker inspect -f '{{.State.Running}}' network_security)" != "true" ]; then
-            echo "Container failed to start"
-            docker logs network_security
+          HEALTHY=false
+
+          for i in {1..12}; do
+
+            if curl -fsS http://127.0.0.1:8080/docs > /dev/null; then
+              HEALTHY=true
+              break
+            fi
+
+            sleep 5
+          done
+
+          if [ "$HEALTHY" != "true" ]; then
+
+            echo "New application failed health check."
+
+            docker logs --tail 100 network_security
+
+            docker rm -f network_security || true
+
+            if docker ps -a --format '{{.Names}}' | grep -qx network_security_previous; then
+              docker rename network_security_previous network_security
+              docker start network_security
+              echo "Previous application restored."
+            fi
+
             exit 1
           fi
 
-          echo "Container started successfully"
+          echo "FastAPI application is healthy."
 
           docker ps --filter "name=network_security"
 
-          docker logs --tail 50 network_security
+      # ==========================================
+      # REMOVE PREVIOUS CONTAINER
+      # ==========================================
+      - name: Remove Previous Container
+        run: |
+          docker rm -f network_security_previous || true
 
       # ==========================================
       # CLEAN UNUSED DOCKER IMAGES
