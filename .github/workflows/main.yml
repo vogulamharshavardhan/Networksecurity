@@ -40,10 +40,6 @@ jobs:
     needs: integration
     runs-on: ubuntu-latest
 
-    outputs:
-       registry: ${{ steps.login-ecr.outputs.registry }}
-       image_uri: ${{ steps.build-image.outputs.image_uri }}
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
@@ -56,7 +52,8 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Verify AWS Identity
-        run: aws sts get-caller-identity
+        run: |
+          aws sts get-caller-identity
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -68,21 +65,22 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
 
           : "${ECR_REGISTRY:?ECR registry is empty}"
           : "${ECR_REPOSITORY:?ECR repository secret is missing}"
+          : "${AWS_REGION:?AWS region is missing}"
 
           echo "ECR Registry: $ECR_REGISTRY"
           echo "ECR Repository: $ECR_REPOSITORY"
 
           aws ecr describe-repositories \
             --repository-names "$ECR_REPOSITORY" \
-            --region "${{ secrets.AWS_REGION }}"
+            --region "$AWS_REGION"
 
       - name: Build and Push Docker Image
-        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
@@ -109,58 +107,18 @@ jobs:
           echo "Pushing latest image..."
           docker push "$LATEST_URI"
 
-          # Export image as a step output
-          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
-
-          # Verify output generation
-          : "${IMAGE_URI:?Docker image URI is empty}"
-
-          echo "Successfully built and pushed: $IMAGE_URI"
-
-      - name: Verify Build Outputs
-        env:
-          IMAGE: ${{ steps.build-image.outputs.image_uri }}
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          set -euo pipefail
-
-          : "${IMAGE:?Build image output is empty}"
-          : "${REGISTRY:?Registry output is empty}"
-
-          echo "Build output: $IMAGE"
-          echo "Registry output: $REGISTRY"
+          echo "Docker image successfully pushed to ECR."
+          echo "Image URI: $IMAGE_URI"
 
   # ==========================================
   # 3. CONTINUOUS DEPLOYMENT
   # ==========================================
-  
   Continuous-Deployment:
     name: Continuous Deployment
     needs: build-and-push-ecr-image
     runs-on: self-hosted
 
     steps:
-      - name: Validate Deployment Outputs
-        env:
-          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
-          REGISTRY: ${{ needs.build-and-push-ecr-image.outputs.registry }}
-        run: |
-          set -euo pipefail
-
-          : "${IMAGE:?Deployment image output is empty}"
-          : "${REGISTRY:?ECR registry output is empty}"
-
-          echo "Deployment image: $IMAGE"
-          echo "ECR Registry: $REGISTRY"
-
-          case "$IMAGE" in
-            "$REGISTRY"/*:*) ;;
-            *)
-              echo "Invalid image reference: $IMAGE"
-              exit 1
-              ;;
-          esac
-
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
@@ -168,16 +126,46 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Generate ECR Image URI
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          : "${AWS_REGION:?AWS region is missing}"
+          : "${ECR_REPOSITORY:?ECR repository is missing}"
+          : "${IMAGE_TAG:?Image tag is missing}"
+
+          echo "Retrieving ECR repository URI..."
+
+          REPOSITORY_URI=$(aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY" \
+            --region "$AWS_REGION" \
+            --query 'repositories[0].repositoryUri' \
+            --output text)
+
+          : "${REPOSITORY_URI:?Could not retrieve ECR repository URI}"
+
+          IMAGE="${REPOSITORY_URI}:${IMAGE_TAG}"
+
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+          echo "Generated deployment image:"
+          echo "$IMAGE"
+
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
         with:
           mask-password: 'true'
 
       - name: Pull Docker Image
-        env:
-          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
         run: |
           set -euo pipefail
+
+          echo "Pulling image: $IMAGE"
+
           docker pull "$IMAGE"
 
       - name: Stop Existing Container
@@ -185,8 +173,6 @@ jobs:
           docker rm -f network_security || true
 
       - name: Run New Docker Container
-        env:
-          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
         run: |
           set -euo pipefail
 
@@ -200,6 +186,7 @@ jobs:
       - name: Verify Container
         run: |
           set -euo pipefail
+
           sleep 5
 
           if [ "$(docker inspect -f '{{.State.Running}}' network_security)" != "true" ]; then
@@ -209,8 +196,11 @@ jobs:
           fi
 
           echo "Container started successfully"
+
           docker ps --filter "name=network_security"
+
           docker logs --tail 50 network_security
 
       - name: Clean Unused Docker Images
-        run: docker image prune -f
+        run: |
+          docker image prune -f
