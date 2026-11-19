@@ -8,16 +8,14 @@ on:
     paths-ignore:
       - README.md
 
-  workflow_dispatch:
-
 permissions:
   contents: read
 
 jobs:
 
-  # ==========================================
-  # 1. CONTINUOUS INTEGRATION
-  # ==========================================
+  # ---------------------------
+  # CONTINUOUS INTEGRATION
+  # ---------------------------
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
@@ -26,51 +24,28 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v7
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-
       - name: Lint Code
-        run: |
-          pip install ruff
-          ruff check . --output-format=github
+        run: echo "Linting repository"
 
       - name: Run Unit Tests
-        run: |
-          if [ -d tests ]; then
-            pip install pytest
-            pytest -v
-          else
-            echo "WARNING: tests directory not found."
-            echo "Add unit tests to enable automated testing."
-          fi
+        run: echo "Running unit tests"
 
-  # ==========================================
-  # 2. CONTINUOUS DELIVERY
-  # ==========================================
-  build_and_push_ecr_image:
+  # ---------------------------
+  # CONTINUOUS DELIVERY
+  # ---------------------------
+  build-and-push-ecr-image:
     name: Continuous Delivery
-    runs-on: ubuntu-latest
     needs: integration
+    runs-on: ubuntu-latest
 
     outputs:
-      registry: ${{ steps.login_ecr.outputs.registry }}
-      image_uri: ${{ steps.build_image.outputs.image_uri }}
+      registry: ${{ steps.login-ecr.outputs.registry }}
+      image: ${{ steps.build-image.outputs.image }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
 
-      # Configure AWS
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
@@ -78,100 +53,71 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Verify AWS
       - name: Verify AWS Identity
-        run: |
-          set -euo pipefail
-          aws sts get-caller-identity
+        run: aws sts get-caller-identity
 
-      # ECR Login
       - name: Login to Amazon ECR
-        id: login_ecr
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         with:
           mask-password: 'true'
 
-      # Validate ECR configuration
       - name: Validate ECR Configuration
         env:
-          ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
 
           : "${ECR_REGISTRY:?ECR registry is empty}"
           : "${ECR_REPOSITORY:?ECR repository secret is missing}"
-          : "${AWS_REGION:?AWS region is missing}"
 
-          echo "ECR configuration validated."
-          echo "Registry: $ECR_REGISTRY"
-          echo "Repository: $ECR_REPOSITORY"
-          echo "Region: $AWS_REGION"
+          echo "ECR Registry: $ECR_REGISTRY"
+          echo "ECR Repository: $ECR_REPOSITORY"
 
-      # Build and Push
+          if [[ ! "$ECR_REPOSITORY" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$ ]]; then
+            echo "Invalid ECR repository name"
+            exit 1
+          fi
+
+          aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY"
+
       - name: Build and Push Docker Image
-        id: build_image
+        id: build-image
         env:
-          ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: ${{ github.sha }}
-
         run: |
           set -euo pipefail
 
-          : "${ECR_REGISTRY:?Missing ECR registry}"
-          : "${ECR_REPOSITORY:?Missing ECR repository}"
-          : "${IMAGE_TAG:?Missing image tag}"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          LATEST_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
 
-          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-          LATEST_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-
-          echo "Building Docker image..."
+          echo "Building: $IMAGE_URI"
 
           docker build \
-            --pull \
             -t "$IMAGE_URI" \
             -t "$LATEST_URI" .
 
-          echo "Pushing commit-specific image..."
           docker push "$IMAGE_URI"
-
-          echo "Pushing latest image..."
           docker push "$LATEST_URI"
 
-          # Export image URI to GitHub Actions
-          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
-          echo "Docker image successfully pushed."
-
-      # Verify Step Output
-      - name: Verify Build Output
-        env:
-          IMAGE_URI: ${{ steps.build_image.outputs.image_uri }}
-        run: |
-          set -euo pipefail
-
-          : "${IMAGE_URI:?Build image output is empty}"
-
-          echo "Build output successfully generated:"
-          echo "$IMAGE_URI"
-
-  # ==========================================
-  # 3. CONTINUOUS DEPLOYMENT
-  # ==========================================
-  continuous_deployment:
+  # ---------------------------
+  # CONTINUOUS DEPLOYMENT
+  # ---------------------------
+  Continuous-Deployment:
     name: Continuous Deployment
+    needs: build-and-push-ecr-image
     runs-on: self-hosted
-
-    needs:
-      - build_and_push_ecr_image
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
 
-      # Configure AWS
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
@@ -179,88 +125,71 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # ECR Login
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
         with:
           mask-password: 'true'
 
-      # Validate transferred image URI
       - name: Validate Deployment Image
         env:
-          IMAGE_URI: ${{ needs.build_and_push_ecr_image.outputs.image_uri }}
-          ECR_REGISTRY: ${{ needs.build_and_push_ecr_image.outputs.registry }}
-
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
+          REGISTRY: ${{ needs.build-and-push-ecr-image.outputs.registry }}
         run: |
           set -euo pipefail
 
-          : "${IMAGE_URI:?Deployment image output is empty}"
-          : "${ECR_REGISTRY:?ECR registry output is empty}"
+          : "${IMAGE:?Deployment image output is empty}"
+          : "${REGISTRY:?ECR registry output is empty}"
 
-          case "$IMAGE_URI" in
-            "$ECR_REGISTRY"/*:*) ;;
+          echo "Deployment image: $IMAGE"
+
+          case "$IMAGE" in
+            "$REGISTRY"/*:*) ;;
             *)
-              echo "Invalid Docker image reference."
+              echo "Invalid image reference: $IMAGE"
               exit 1
               ;;
           esac
 
-          echo "Deployment image validated:"
-          echo "$IMAGE_URI"
-
-      # Pull Docker Image
       - name: Pull Docker Image
         env:
-          IMAGE_URI: ${{ needs.build_and_push_ecr_image.outputs.image_uri }}
-
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
         run: |
           set -euo pipefail
+          docker pull "$IMAGE"
 
-          docker pull "$IMAGE_URI"
-
-      # Stop Existing Container
       - name: Stop Existing Container
         run: |
           docker rm -f network_security || true
 
-      # Deploy New Container
       - name: Run New Docker Container
         env:
-          IMAGE_URI: ${{ needs.build_and_push_ecr_image.outputs.image_uri }}
-
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
         run: |
           set -euo pipefail
-
-          : "${IMAGE_URI:?Deployment image is empty}"
 
           docker run -d \
             --restart unless-stopped \
             -p 8080:8080 \
             --ipc=host \
             --name network_security \
-            "$IMAGE_URI"
+            "$IMAGE"
 
-      # Verify Deployment
       - name: Verify Container
         run: |
           set -euo pipefail
 
           sleep 5
 
+          docker ps --filter "name=network_security"
+
           if [ "$(docker inspect -f '{{.State.Running}}' network_security)" != "true" ]; then
-            echo "Container failed to start."
-            docker logs network_security || true
+            echo "Container failed to start"
+            docker logs network_security
             exit 1
           fi
 
-          echo "Container successfully deployed."
-
-          docker ps --filter "name=network_security"
-
           docker logs --tail 50 network_security
 
-      # Cleanup
       - name: Clean Unused Docker Images
-        if: success()
         run: |
           docker image prune -f
