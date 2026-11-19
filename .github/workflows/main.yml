@@ -133,16 +133,33 @@ jobs:
   # ==========================================
   # 3. CONTINUOUS DEPLOYMENT
   # ==========================================
+  
   Continuous-Deployment:
     name: Continuous Deployment
     needs: build-and-push-ecr-image
     runs-on: self-hosted
 
-    env:
-      IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
-      REGISTRY: ${{ needs.build-and-push-ecr-image.outputs.registry }}
-
     steps:
+      - name: Validate Deployment Outputs
+        env:
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
+          REGISTRY: ${{ needs.build-and-push-ecr-image.outputs.registry }}
+        run: |
+          set -euo pipefail
+
+          : "${IMAGE:?Deployment image output is empty}"
+          : "${REGISTRY:?ECR registry output is empty}"
+
+          echo "Deployment image: $IMAGE"
+          echo "ECR Registry: $REGISTRY"
+
+          case "$IMAGE" in
+            "$REGISTRY"/*:*) ;;
+            *)
+              echo "Invalid image reference: $IMAGE"
+              exit 1
+              ;;
+          esac
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
@@ -156,27 +173,11 @@ jobs:
         with:
           mask-password: 'true'
 
-      - name: Validate Deployment Image
-        run: |
-          set -euo pipefail
-
-          : "${IMAGE:?Deployment image output is empty}"
-          : "${REGISTRY:?ECR registry output is empty}"
-
-          echo "Deployment image: $IMAGE"
-
-          case "$IMAGE" in
-            "$REGISTRY"/*:*) ;;
-            *)
-              echo "Invalid image reference: $IMAGE"
-              exit 1
-              ;;
-          esac
-
       - name: Pull Docker Image
+        env:
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
         run: |
           set -euo pipefail
-
           docker pull "$IMAGE"
 
       - name: Stop Existing Container
@@ -184,6 +185,8 @@ jobs:
           docker rm -f network_security || true
 
       - name: Run New Docker Container
+        env:
+          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
         run: |
           set -euo pipefail
 
@@ -197,10 +200,7 @@ jobs:
       - name: Verify Container
         run: |
           set -euo pipefail
-
           sleep 5
-
-          docker ps --filter "name=network_security"
 
           if [ "$(docker inspect -f '{{.State.Running}}' network_security)" != "true" ]; then
             echo "Container failed to start"
@@ -209,9 +209,8 @@ jobs:
           fi
 
           echo "Container started successfully"
-
+          docker ps --filter "name=network_security"
           docker logs --tail 50 network_security
 
       - name: Clean Unused Docker Images
-        run: |
-          docker image prune -f
+        run: docker image prune -f
