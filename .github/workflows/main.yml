@@ -41,8 +41,8 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      registry: ${{ steps.login-ecr.outputs.registry }}
-      image: ${{ steps.build-image.outputs.image_uri }}
+       registry: ${{ steps.login-ecr.outputs.registry }}
+       image_uri: ${{ steps.build-image.outputs.image_uri }}
 
     steps:
       - name: Checkout Code
