@@ -1,5 +1,5 @@
 
-name: NetworkSecurity CI-CD pipeline 
+name: NetworkSecurity CI-CD pipeline
 
 on:
   push:
@@ -119,6 +119,27 @@ jobs:
     runs-on: self-hosted
 
     steps:
+
+      # ==========================================
+      # VERIFY AWS CLI INSTALLATION
+      # ==========================================
+      - name: Verify AWS CLI
+        run: |
+          set -euo pipefail
+
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+          echo "Checking AWS CLI installation..."
+
+          echo "AWS CLI location:"
+          command -v aws
+
+          echo "AWS CLI version:"
+          aws --version
+
+      # ==========================================
+      # CONFIGURE AWS CREDENTIALS
+      # ==========================================
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
@@ -126,6 +147,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # ==========================================
+      # GENERATE ECR IMAGE URI
+      # ==========================================
       - name: Generate ECR Image URI
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -133,6 +157,8 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
           : "${AWS_REGION:?AWS region is missing}"
           : "${ECR_REPOSITORY:?ECR repository is missing}"
@@ -155,11 +181,17 @@ jobs:
           echo "Generated deployment image:"
           echo "$IMAGE"
 
+      # ==========================================
+      # LOGIN TO AMAZON ECR
+      # ==========================================
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
         with:
           mask-password: 'true'
 
+      # ==========================================
+      # PULL DOCKER IMAGE
+      # ==========================================
       - name: Pull Docker Image
         run: |
           set -euo pipefail
@@ -168,10 +200,16 @@ jobs:
 
           docker pull "$IMAGE"
 
+      # ==========================================
+      # STOP EXISTING CONTAINER
+      # ==========================================
       - name: Stop Existing Container
         run: |
           docker rm -f network_security || true
 
+      # ==========================================
+      # RUN NEW DOCKER CONTAINER
+      # ==========================================
       - name: Run New Docker Container
         run: |
           set -euo pipefail
@@ -183,6 +221,9 @@ jobs:
             --name network_security \
             "$IMAGE"
 
+      # ==========================================
+      # VERIFY CONTAINER
+      # ==========================================
       - name: Verify Container
         run: |
           set -euo pipefail
@@ -201,6 +242,9 @@ jobs:
 
           docker logs --tail 50 network_security
 
+      # ==========================================
+      # CLEAN UNUSED DOCKER IMAGES
+      # ==========================================
       - name: Clean Unused Docker Images
         run: |
           docker image prune -f
