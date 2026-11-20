@@ -1,21 +1,212 @@
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-    <title>Data Table</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Network Security | Prediction Results</title>
+
     <style>
-        table {
-            border-collapse: collapse;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            background: #f4f6f9;
+            color: #333;
+            padding: 30px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: auto;
+        }
+
+        .header {
+            background: #172b4d;
+            color: white;
+            padding: 25px 30px;
+            border-radius: 10px 10px 0 0;
+        }
+
+        .header h1 {
+            font-size: 25px;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #d5deeb;
+        }
+
+        .content {
+            background: white;
+            padding: 25px;
+            border-radius: 0 0 10px 10px;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.06);
+        }
+
+        .section-title {
+            font-size: 19px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #172b4d;
+        }
+
+        .table-container {
             width: 100%;
+            overflow-x: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
         }
-        th, td {
-            border: 1px solid black;
-            padding: 8px;
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            min-width: 700px;
+        }
+
+        table th {
+            background: #263f63;
+            color: white;
+            padding: 13px 12px;
             text-align: left;
+            white-space: nowrap;
         }
+
+        table td {
+            padding: 11px 12px;
+            border-bottom: 1px solid #e8e8e8;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        table tr:nth-child(even) {
+            background: #f8fafc;
+        }
+
+        table tr:hover {
+            background: #eaf2ff;
+        }
+
+        table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .footer {
+            margin-top: 20px;
+            text-align: center;
+            color: #777;
+            font-size: 12px;
+        }
+
+        .actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 11px 18px;
+            background: #263f63;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 13px;
+            transition: background 0.2s ease;
+        }
+
+        .btn:hover {
+            background: #172b4d;
+        }
+
+        @media screen and (max-width: 768px) {
+            body {
+                padding: 12px;
+            }
+
+            .header {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 21px;
+            }
+
+            .content {
+                padding: 15px;
+            }
+
+            .section-title {
+                font-size: 17px;
+            }
+        }
+
     </style>
 </head>
+
 <body>
-    <h2>Predicted Data</h2>
-    {{ table | safe }}
+
+    <div class="container">
+
+        <!-- HEADER -->
+        <div class="header">
+
+            <h1>Network Security Prediction System</h1>
+
+            <p>
+                Machine Learning Based Network Threat Detection
+            </p>
+
+        </div>
+
+
+        <!-- MAIN CONTENT -->
+        <div class="content">
+
+            <div class="section-title">
+                Prediction Results
+            </div>
+
+
+            <!-- PREDICTION TABLE -->
+            <div class="table-container">
+
+                {{ table | safe }}
+
+            </div>
+
+
+            <!-- ACTIONS -->
+            <div class="actions">
+
+                <a href="/docs" class="btn">
+                    Back to API Documentation
+                </a>
+
+            </div>
+
+
+            <!-- FOOTER -->
+            <div class="footer">
+
+                Network Security ML Application |
+                Powered by Machine Learning
+
+            </div>
+
+        </div>
+
+    </div>
+
 </body>
+
 </html>

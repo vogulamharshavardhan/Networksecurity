@@ -1,3 +1,4 @@
+
 import sys
 import os
 
@@ -6,6 +7,27 @@ import pymongo
 import pandas as pd
 
 from dotenv import load_dotenv
+
+from networksecurity.exception.exception import NetworkSecurityException
+from networksecurity.logging.logger import logging
+from networksecurity.pipeline.training_pipeline import TrainingPipeline
+
+from networksecurity.constant.training_pipeline import (
+    DATA_INGESTION_COLLECTION_NAME,
+    DATA_INGESTION_DATABASE_NAME
+)
+
+from networksecurity.utils.main_utils.utils import load_object
+from networksecurity.utils.ml_utils.model.estimator import NetworkModel
+
+from fastapi import FastAPI, File, UploadFile, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from starlette.responses import RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from uvicorn import run as app_run
+
 
 # ==========================================
 # LOAD ENVIRONMENT VARIABLES
@@ -20,22 +42,6 @@ mongo_db_url = os.getenv("MONGODB_URL_KEY")
 if not mongo_db_url:
     raise EnvironmentError("MONGODB_URL_KEY is missing")
 
-# ==========================================
-# PROJECT IMPORTS
-# ==========================================
-
-from networksecurity.exception.exception import NetworkSecurityException
-from networksecurity.logging.logger import logging
-from networksecurity.pipeline.training_pipeline import TrainingPipeline
-from networksecurity.constant.training_pipeline import SAVED_MODEL_DIR
-
-from networksecurity.constant.training_pipeline import (
-    DATA_INGESTION_COLLECTION_NAME,
-    DATA_INGESTION_DATABASE_NAME
-)
-
-from networksecurity.utils.main_utils.utils import load_object
-from networksecurity.utils.ml_utils.model.estimator import NetworkModel
 
 # ==========================================
 # MONGODB CONNECTION
@@ -50,18 +56,16 @@ client = pymongo.MongoClient(
 database = client[DATA_INGESTION_DATABASE_NAME]
 collection = database[DATA_INGESTION_COLLECTION_NAME]
 
+
 # ==========================================
 # FASTAPI APPLICATION
 # ==========================================
 
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, File, UploadFile, Request
-from fastapi.responses import Response
-from starlette.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
-from uvicorn import run as app_run
-
-app = FastAPI()
+app = FastAPI(
+    title="Network Security ML API",
+    description="Network Security Prediction Application",
+    version="1.0.0"
+)
 
 origins = ["*"]
 
@@ -75,6 +79,7 @@ app.add_middleware(
 
 templates = Jinja2Templates(directory="./templates")
 
+
 # ==========================================
 # HOME ROUTE
 # ==========================================
@@ -83,20 +88,27 @@ templates = Jinja2Templates(directory="./templates")
 async def index():
     return RedirectResponse(url="/docs")
 
+
 # ==========================================
 # TRAINING ROUTE
 # ==========================================
 
 @app.get("/train")
 async def train_route():
+
     try:
         train_pipeline = TrainingPipeline()
+
         train_pipeline.run_pipeline()
 
-        return Response("Training is successful")
+        return Response(
+            content="Training is successful",
+            media_type="text/plain"
+        )
 
     except Exception as e:
         raise NetworkSecurityException(e, sys)
+
 
 # ==========================================
 # PREDICTION ROUTE
@@ -107,30 +119,71 @@ async def predict_route(
     request: Request,
     file: UploadFile = File(...)
 ):
+
     try:
+
+        # Validate uploaded file
+        if not file.filename.lower().endswith(".csv"):
+            return Response(
+                content="Please upload a valid CSV file",
+                status_code=400
+            )
+
+        # Read uploaded CSV
         df = pd.read_csv(file.file)
 
-        preprocesor = load_object("final_model/preprocessor.pkl")
-        final_model = load_object("final_model/model.pkl")
+        if df.empty:
+            return Response(
+                content="Uploaded CSV file is empty",
+                status_code=400
+            )
 
+        # Load preprocessing object
+        preprocessor = load_object(
+            "final_model/preprocessor.pkl"
+        )
+
+        # Load trained model
+        final_model = load_object(
+            "final_model/model.pkl"
+        )
+
+        # Initialize prediction model
         network_model = NetworkModel(
-            preprocessor=preprocesor,
+            preprocessor=preprocessor,
             model=final_model
         )
 
+        # Generate predictions
         y_pred = network_model.predict(df)
 
+        # Add predictions to DataFrame
         df["predicted_column"] = y_pred
 
-        os.makedirs("prediction_output", exist_ok=True)
+        # Create output directory
+        os.makedirs(
+            "prediction_output",
+            exist_ok=True
+        )
 
-        df.to_csv("prediction_output/output.csv", index=False)
+        # Save prediction results
+        df.to_csv(
+            "prediction_output/output.csv",
+            index=False
+        )
 
-        table_html = df.to_html(classes="table table-striped")
+        # Convert DataFrame into HTML
+        table_html = df.to_html(
+            classes="table table-striped",
+            index=False,
+            border=0
+        )
 
+        # Render HTML template
         return templates.TemplateResponse(
-            "table.html",
-            {
+            request=request,
+            name="table.html",
+            context={
                 "request": request,
                 "table": table_html
             }
@@ -139,11 +192,16 @@ async def predict_route(
     except Exception as e:
         raise NetworkSecurityException(e, sys)
 
+    finally:
+        await file.close()
+
+
 # ==========================================
 # APPLICATION STARTUP
 # ==========================================
 
 if __name__ == "__main__":
+
     app_run(
         app,
         host="0.0.0.0",
