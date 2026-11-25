@@ -134,11 +134,3 @@ networksecurity/
 ├── dockerfile              # Docker configuration
 └── requirements.txt       # Dependencies
 ```
-
-## Future Improvements
-
-- Improve model selection using classification metrics and a separate holdout dataset.
-- Strengthen schema validation and add automated tests.
-- Add API authentication and monitoring.
-
-No explicit software license is included. Dataset provenance and licensing still need to be documented.
