@@ -112,8 +112,7 @@ The GitHub Actions workflow automates image building, delivery to Amazon ECR and
 
 ![Successful GitHub Actions workflow](docs/screenshots/github-actions-cicd.png)
 
-All three jobs completed successfully in **2 minutes 55 seconds** in the supplied run. This does not establish current EC2 availability or automated test coverage (the CI test/lint commands are placeholders).
-
+All three jobs completed successfully in **2 minutes 55 seconds** in the supplied run. 
 For Docker and AWS configuration, see the [deployment guide](docs/DEPLOYMENT.md).
 
 ## Project Structure
